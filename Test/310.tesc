@@ -115,15 +115,29 @@ void pointSize2()
     gl_out[1].gl_PointSize = ps;
 }
 
-// for testing with gpu_shader5
-//precise vec3 pv3;
-//
-//void foop()
-//{
-//    precise double d;
-//
-//    pv3 *= pv3;
-//    pv3 = fma(pv3, pv3, pv3);
-//    d = fma(d, d, d);
-//}
-//
+#extension GL_OES_gpu_shader5 : enable
+
+precise vec3 pv3;
+
+void goodfoop()
+{
+    precise float d;
+
+    pv3 *= pv3;
+    pv3 = fma(pv3, pv3, pv3);
+    d = fma(d, d, d);
+}
+
+void bbBad()
+{
+    gl_BoundingBoxOES;  // ERROR without GL_OES_primitive_bounding_box 
+}
+
+#extension GL_OES_primitive_bounding_box : enable
+
+void bb()
+{
+    gl_BoundingBoxOES[0] = vec4(0.0);
+    gl_BoundingBoxOES[1] = vec4(1.0);
+    gl_BoundingBoxOES[2] = vec4(2.0);  // ERROR, overflow
+}

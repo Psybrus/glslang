@@ -102,6 +102,7 @@ public:
     Id makeVectorType(Id component, int size);
     Id makeMatrixType(Id component, int cols, int rows);
     Id makeArrayType(Id element, unsigned size);
+    Id makeRuntimeArray(Id element);
     Id makeFunctionType(Id returnType, std::vector<Id>& paramTypes);
     Id makeImageType(Id sampledType, Dim, bool depth, bool arrayed, bool ms, unsigned sampled, ImageFormat format);
     Id makeSampledImageType(Id imageType);
@@ -158,8 +159,9 @@ public:
     }
     Id getImageType(Id resultId) const
     {
-        assert(isSampledImageType(getTypeId(resultId)));
-        return module.getInstruction(getTypeId(resultId))->getIdOperand(0);
+        Id typeId = getTypeId(resultId);
+        assert(isImageType(typeId) || isSampledImageType(typeId));
+        return isSampledImageType(typeId) ? module.getInstruction(typeId)->getIdOperand(0) : typeId;
     }
     bool isArrayedImageType(Id typeId) const
     {
@@ -180,7 +182,7 @@ public:
 
     // Methods for adding information outside the CFG.
     void addEntryPoint(ExecutionModel, Function*, const char* name);
-    void addExecutionMode(Function*, ExecutionMode mode, int value = -1);
+    void addExecutionMode(Function*, ExecutionMode mode, int value1 = -1, int value2 = -1, int value3 = -1);
     void addName(Id, const char* name);
     void addMemberName(Id, int member, const char* name);
     void addLine(Id target, Id fileName, int line, int column);
@@ -194,23 +196,16 @@ public:
     // Make the main function.
     Function* makeMain();
 
-    // Return from main. Implicit denotes a return at the very end of main.
-    void makeMainReturn(bool implicit = false) { makeReturn(implicit, 0, true); }
-
-    // Close the main function.
-    void closeMain();
-
     // Make a shader-style function, and create its entry block if entry is non-zero.
     // Return the function, pass back the entry.
     Function* makeFunctionEntry(Id returnType, const char* name, std::vector<Id>& paramTypes, Block **entry = 0);
 
-    // Create a return. Pass whether it is a return form main, and the return
-    // value (if applicable). In the case of an implicit return, no post-return
-    // block is inserted.
-    void makeReturn(bool implicit = false, Id retVal = 0, bool isMain = false);
+    // Create a return. An 'implicit' return is one not appearing in the source
+    // code.  In the case of an implicit return, no post-return block is inserted.
+    void makeReturn(bool implicit, Id retVal = 0);
 
     // Generate all the code needed to finish up a function.
-    void leaveFunction(bool main);
+    void leaveFunction();
 
     // Create a discard.
     void makeDiscard();
@@ -230,6 +225,9 @@ public:
     // Create an OpAccessChain instruction
     Id createAccessChain(StorageClass, Id base, std::vector<Id>& offsets);
 
+    // Create an OpArrayLength instruction
+    Id createArrayLength(Id base, unsigned int member);
+
     // Create an OpCompositeExtract instruction
     Id createCompositeExtract(Id composite, Id typeId, unsigned index);
     Id createCompositeExtract(Id composite, Id typeId, std::vector<unsigned>& indexes);
@@ -241,6 +239,7 @@ public:
 
     void createNoResultOp(Op);
     void createNoResultOp(Op, Id operand);
+    void createNoResultOp(Op, const std::vector<Id>& operands);
     void createControlBarrier(Scope execution, Scope memory, MemorySemanticsMask);
     void createMemoryBarrier(unsigned executionScope, unsigned memorySemantics);
     Id createUnaryOp(Op, Id typeId, Id operand);
@@ -298,7 +297,7 @@ public:
     };
 
     // Select the correct texture operation based on all inputs, and emit the correct instruction
-    Id createTextureCall(Decoration precision, Id resultType, bool proj, const TextureParameters&);
+    Id createTextureCall(Decoration precision, Id resultType, bool fetch, bool proj, const TextureParameters&);
 
     // Emit the OpTextureQuery* instruction that was passed in.
     // Figure out the right return value and type, and return it.
@@ -430,7 +429,7 @@ public:
         Id instr;                    // the instruction that generates this access chain
         std::vector<unsigned> swizzle;
         Id component;                // a dynamic component index, can coexist with a swizzle, done after the swizzle
-        Id resultType;               // dereferenced type, to be exclusive of swizzles
+        Id preSwizzleBaseType;       // dereferenced type, before swizzle or component is applied; NoType unless a swizzle or component is present
         bool isRValue;
     };
 
@@ -451,7 +450,6 @@ public:
     {
         assert(isPointer(lValue));
         accessChain.base = lValue;
-        accessChain.resultType = getContainedTypeId(getTypeId(lValue));
     }
 
     // set new base value as an r-value
@@ -459,27 +457,30 @@ public:
     {
         accessChain.isRValue = true;
         accessChain.base = rValue;
-        accessChain.resultType = getTypeId(rValue);
     }
 
     // push offset onto the end of the chain
-    void accessChainPush(Id offset, Id newType)
+    void accessChainPush(Id offset)
     {
         accessChain.indexChain.push_back(offset);
-        accessChain.resultType = newType;
     }
 
     // push new swizzle onto the end of any existing swizzle, merging into a single swizzle
-    void accessChainPushSwizzle(std::vector<unsigned>& swizzle);
+    void accessChainPushSwizzle(std::vector<unsigned>& swizzle, Id preSwizzleBaseType);
 
     // push a variable component selection onto the access chain; supporting only one, so unsided
-    void accessChainPushComponent(Id component) { accessChain.component = component; }
+    void accessChainPushComponent(Id component, Id preSwizzleBaseType)
+    {
+        accessChain.component = component;
+        if (accessChain.preSwizzleBaseType == NoType)
+            accessChain.preSwizzleBaseType = preSwizzleBaseType;
+    }
 
     // use accessChain and swizzle to store value
     void accessChainStore(Id rvalue);
 
     // use accessChain and swizzle to load an r-value
-    Id accessChainLoad(Decoration precision);
+    Id accessChainLoad(Id ResultType);
 
     // get the direct pointer for an l-value
     Id accessChainGetLValue();
@@ -513,7 +514,6 @@ protected:
     Block* buildPoint;
     Id uniqueId;
     Function* mainFunction;
-    Block* stageExit;
     AccessChain accessChain;
 
     // special blocks of instructions for output
@@ -567,8 +567,9 @@ protected:
         const bool testFirst;
         // When the test executes after the body, this is defined as the phi
         // instruction that tells us whether we are on the first iteration of
-        // the loop.  Otherwise this is null.
-        Instruction* const isFirstIteration;
+        // the loop.  Otherwise this is null. This is non-const because
+        // it has to be initialized outside of the initializer-list.
+        Instruction* isFirstIteration;
     };
 
     // Our loop stack.

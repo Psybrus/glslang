@@ -738,6 +738,10 @@ int TScanContext::tokenizeIdentifier()
         return es30ReservedFromGLSL(400);
 
     case SAMPLE:
+        if (parseContext.extensionsTurnedOn(1, &E_GL_OES_shader_multisample_interpolation))
+            return keyword;
+        return es30ReservedFromGLSL(400);
+
     case SUBROUTINE:
         return es30ReservedFromGLSL(400);
 
@@ -781,9 +785,15 @@ int TScanContext::tokenizeIdentifier()
     case IMAGE2DRECT:
     case IIMAGE2DRECT:
     case UIMAGE2DRECT:
+        afterType = true;
+        return firstGenerationImage(false);
+
     case IMAGEBUFFER:
     case IIMAGEBUFFER:
     case UIMAGEBUFFER:
+        afterType = true;
+        if (parseContext.extensionsTurnedOn(Num_AEP_texture_buffer, AEP_texture_buffer))
+            return keyword;
         return firstGenerationImage(false);
 
     case IMAGE2D:
@@ -798,17 +808,24 @@ int TScanContext::tokenizeIdentifier()
     case IMAGE2DARRAY:
     case IIMAGE2DARRAY:
     case UIMAGE2DARRAY:
+        afterType = true;
         return firstGenerationImage(true);
 
     case IMAGECUBEARRAY:
     case IIMAGECUBEARRAY:
-    case UIMAGECUBEARRAY:        
+    case UIMAGECUBEARRAY:
+        afterType = true;
+        if (parseContext.extensionsTurnedOn(Num_AEP_texture_cube_map_array, AEP_texture_cube_map_array))
+            return keyword;
+        return secondGenerationImage();
+
     case IMAGE2DMS:
     case IIMAGE2DMS:
     case UIMAGE2DMS:
     case IMAGE2DMSARRAY:
     case IIMAGE2DMSARRAY:
     case UIMAGE2DMSARRAY:
+        afterType = true;
         return secondGenerationImage();
 
     case DOUBLE:
@@ -825,6 +842,8 @@ int TScanContext::tokenizeIdentifier()
     case ISAMPLERCUBEARRAY:
     case USAMPLERCUBEARRAY:
         afterType = true;
+        if (parseContext.extensionsTurnedOn(Num_AEP_texture_cube_map_array, AEP_texture_cube_map_array))
+            return keyword;
         if (parseContext.profile == EEsProfile || (parseContext.version < 400 && ! parseContext.extensionTurnedOn(E_GL_ARB_texture_cube_map_array)))
             reservedWord();
         return keyword;
@@ -834,7 +853,6 @@ int TScanContext::tokenizeIdentifier()
     case SAMPLER1DARRAYSHADOW:
     case USAMPLER1D:
     case USAMPLER1DARRAY:
-    case SAMPLERBUFFER:
         afterType = true;
         return es30ReservedFromGLSL(130);
 
@@ -858,9 +876,20 @@ int TScanContext::tokenizeIdentifier()
         
     case ISAMPLER2DRECT:
     case USAMPLER2DRECT:
+        afterType = true;
+        return es30ReservedFromGLSL(140);
+
+    case SAMPLERBUFFER:
+        afterType = true;
+        if (parseContext.extensionsTurnedOn(Num_AEP_texture_buffer, AEP_texture_buffer))
+            return keyword;
+        return es30ReservedFromGLSL(130);
+
     case ISAMPLERBUFFER:
     case USAMPLERBUFFER:
         afterType = true;
+        if (parseContext.extensionsTurnedOn(Num_AEP_texture_buffer, AEP_texture_buffer))
+            return keyword;
         return es30ReservedFromGLSL(140);
         
     case SAMPLER2DMS:
@@ -875,6 +904,8 @@ int TScanContext::tokenizeIdentifier()
     case ISAMPLER2DMSARRAY:
     case USAMPLER2DMSARRAY:
         afterType = true;
+        if (parseContext.extensionsTurnedOn(1, &E_GL_OES_texture_storage_multisample_2d_array))
+            return keyword;
         return es30ReservedFromGLSL(150);
 
     case SAMPLER1D:
@@ -1113,8 +1144,6 @@ int TScanContext::dMat()
 
 int TScanContext::firstGenerationImage(bool inEs310)
 {
-    afterType = true;
-
     if (parseContext.symbolTable.atBuiltInLevel() || 
         (parseContext.profile != EEsProfile && (parseContext.version >= 420 || parseContext.extensionTurnedOn(E_GL_ARB_shader_image_load_store))) ||
         (inEs310 && parseContext.profile == EEsProfile && parseContext.version >= 310))
@@ -1135,8 +1164,6 @@ int TScanContext::firstGenerationImage(bool inEs310)
 
 int TScanContext::secondGenerationImage()
 {
-    afterType = true;
-
     if (parseContext.profile == EEsProfile && parseContext.version >= 310) {
         reservedWord();
         return keyword;

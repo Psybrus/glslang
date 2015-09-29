@@ -1107,11 +1107,14 @@ TIntermTyped* TParseContext::handleFunctionCall(const TSourceLoc& loc, TFunction
                 result = intermediate.addBuiltInFunctionCall(loc, op, fnCandidate->getParamCount() == 1, arguments, fnCandidate->getType());
                 if (result == nullptr)  {
                     error(arguments->getLoc(), " wrong operand type", "Internal Error",
-                                        "built in unary operator function.  Type: %s",
-                                        static_cast<TIntermTyped*>(arguments)->getCompleteString().c_str());
+                                               "built in unary operator function.  Type: %s",
+                                               static_cast<TIntermTyped*>(arguments)->getCompleteString().c_str());
+                } else if (result->getAsOperator()) {
+                    builtInOpCheck(loc, *fnCandidate, *result->getAsOperator());
                 }
             } else {
-                // This is a function call not mapped to built-in operator, but it could still be a built-in function
+                // This is a function call not mapped to built-in operator.
+                // It could still be a built-in function, but only if PureOperatorBuiltins == false.
                 result = intermediate.setAggregateOperator(arguments, EOpFunctionCall, fnCandidate->getType(), loc);
                 TIntermAggregate* call = result->getAsAggregate();
                 call->setName(fnCandidate->getMangledName());
@@ -1325,6 +1328,197 @@ TIntermTyped* TParseContext::addOutputArgumentConversions(const TFunction& funct
 }
 
 //
+// Do additional checking of built-in function calls that is not caught
+// by normal semantic checks on argument type, extension tagging, etc.
+//
+// Assumes there has been a semantically correct match to a built-in function prototype.
+//
+void TParseContext::builtInOpCheck(const TSourceLoc& loc, const TFunction& fnCandidate, TIntermOperator& callNode)
+{
+    // Set up convenience accessors to the argument(s).  There is almost always
+    // multiple arguments for the cases below, but when there might be one,
+    // check the unaryArg first.
+    const TIntermSequence* argp = nullptr;   // confusing to use [] syntax on a pointer, so this is to help get a reference
+    const TIntermTyped* unaryArg = nullptr;
+    const TIntermTyped* arg0 = nullptr;
+    if (callNode.getAsAggregate()) {
+        argp = &callNode.getAsAggregate()->getSequence();
+        if (argp->size() > 0)
+            arg0 = (*argp)[0]->getAsTyped();
+    } else {
+        assert(callNode.getAsUnaryNode());
+        unaryArg = callNode.getAsUnaryNode()->getOperand();
+        arg0 = unaryArg;
+    }
+    const TIntermSequence& aggArgs = *argp;  // only valid when unaryArg is nullptr
+
+    // built-in texturing functions get their return value precision from the precision of the sampler
+    if (fnCandidate.getType().getQualifier().precision == EpqNone &&
+        fnCandidate.getParamCount() > 0 && fnCandidate[0].type->getBasicType() == EbtSampler)
+        callNode.getQualifier().precision = arg0->getQualifier().precision;
+
+    switch (callNode.getOp()) {
+    case EOpTextureGather:
+    case EOpTextureGatherOffset:
+    case EOpTextureGatherOffsets:
+    {
+        // Figure out which variants are allowed by what extensions,
+        // and what arguments must be constant for which situations.
+
+        TString featureString = fnCandidate.getName() + "(...)";
+        const char* feature = featureString.c_str();
+        profileRequires(loc, EEsProfile, 310, nullptr, feature);
+        int compArg = -1;  // track which argument, if any, is the constant component argument
+        switch (callNode.getOp()) {
+        case EOpTextureGather:
+            // More than two arguments needs gpu_shader5, and rectangular or shadow needs gpu_shader5,
+            // otherwise, need GL_ARB_texture_gather.
+            if (fnCandidate.getParamCount() > 2 || fnCandidate[0].type->getSampler().dim == EsdRect || fnCandidate[0].type->getSampler().shadow) {
+                profileRequires(loc, ~EEsProfile, 400, E_GL_ARB_gpu_shader5, feature);
+                if (! fnCandidate[0].type->getSampler().shadow)
+                    compArg = 2;
+            } else
+                profileRequires(loc, ~EEsProfile, 400, E_GL_ARB_texture_gather, feature);
+            break;
+        case EOpTextureGatherOffset:
+            // GL_ARB_texture_gather is good enough for 2D non-shadow textures with no component argument
+            if (fnCandidate[0].type->getSampler().dim == Esd2D && ! fnCandidate[0].type->getSampler().shadow && fnCandidate.getParamCount() == 3)
+                profileRequires(loc, ~EEsProfile, 400, E_GL_ARB_texture_gather, feature);
+            else
+                profileRequires(loc, ~EEsProfile, 400, E_GL_ARB_gpu_shader5, feature);
+            if (! aggArgs[fnCandidate[0].type->getSampler().shadow ? 3 : 2]->getAsConstantUnion())
+                profileRequires(loc, EEsProfile, 0, Num_AEP_gpu_shader5, AEP_gpu_shader5, "non-constant offset argument");
+            if (! fnCandidate[0].type->getSampler().shadow)
+                compArg = 3;
+            break;
+        case EOpTextureGatherOffsets:
+            profileRequires(loc, ~EEsProfile, 400, E_GL_ARB_gpu_shader5, feature);
+            if (! fnCandidate[0].type->getSampler().shadow)
+                compArg = 3;
+            // check for constant offsets
+            if (! aggArgs[fnCandidate[0].type->getSampler().shadow ? 3 : 2]->getAsConstantUnion())
+                error(loc, "must be a compile-time constant:", feature, "offsets argument");
+            break;
+        default:
+            break;
+        }
+
+        if (compArg > 0 && compArg < fnCandidate.getParamCount()) {
+            if (aggArgs[compArg]->getAsConstantUnion()) {
+                int value = aggArgs[compArg]->getAsConstantUnion()->getConstArray()[0].getIConst();
+                if (value < 0 || value > 3)
+                    error(loc, "must be 0, 1, 2, or 3:", feature, "component argument");
+            } else
+                error(loc, "must be a compile-time constant:", feature, "component argument");
+        }
+
+        break;
+    }
+
+    case EOpTextureOffset:
+    case EOpTextureFetchOffset:
+    case EOpTextureProjOffset:
+    case EOpTextureLodOffset:
+    case EOpTextureProjLodOffset:
+    case EOpTextureGradOffset:
+    case EOpTextureProjGradOffset:
+    {
+        // Handle texture-offset limits checking
+        // Pick which argument has to hold constant offsets
+        int arg = -1;
+        switch (callNode.getOp()) {
+        case EOpTextureOffset:          arg = 2;  break;
+        case EOpTextureFetchOffset:     arg = 3;  break;
+        case EOpTextureProjOffset:      arg = 2;  break;
+        case EOpTextureLodOffset:       arg = 3;  break;
+        case EOpTextureProjLodOffset:   arg = 3;  break;
+        case EOpTextureGradOffset:      arg = 4;  break;
+        case EOpTextureProjGradOffset:  arg = 4;  break;
+        default:
+            assert(0);
+            break;
+        }
+
+        if (arg > 0) {
+            if (! aggArgs[arg]->getAsConstantUnion())
+                error(loc, "argument must be compile-time constant", "texel offset", "");
+            else {
+                const TType& type = aggArgs[arg]->getAsTyped()->getType();
+                for (int c = 0; c < type.getVectorSize(); ++c) {
+                    int offset = aggArgs[arg]->getAsConstantUnion()->getConstArray()[c].getIConst();
+                    if (offset > resources.maxProgramTexelOffset || offset < resources.minProgramTexelOffset)
+                        error(loc, "value is out of range:", "texel offset", "[gl_MinProgramTexelOffset, gl_MaxProgramTexelOffset]");
+                }
+            }
+        }
+
+        break;
+    }
+
+    case EOpTextureQuerySamples:
+    case EOpImageQuerySamples:
+        // GL_ARB_shader_texture_image_samples
+        profileRequires(loc, ~EEsProfile, 450, E_GL_ARB_shader_texture_image_samples, "textureSamples and imageSamples");
+        break;
+
+    case EOpImageAtomicAdd:
+    case EOpImageAtomicMin:
+    case EOpImageAtomicMax:
+    case EOpImageAtomicAnd:
+    case EOpImageAtomicOr:
+    case EOpImageAtomicXor:
+    case EOpImageAtomicExchange:
+    case EOpImageAtomicCompSwap:
+    {
+        // Make sure the image types have the correct layout() format and correct argument types
+        const TType& imageType = arg0->getType();
+        if (imageType.getSampler().type == EbtInt || imageType.getSampler().type == EbtUint) {
+            if (imageType.getQualifier().layoutFormat != ElfR32i && imageType.getQualifier().layoutFormat != ElfR32ui)
+                error(loc, "only supported on image with format r32i or r32ui", fnCandidate.getName().c_str(), "");
+        } else {
+            if (fnCandidate.getName().compare(0, 19, "imageAtomicExchange") != 0) 
+                error(loc, "only supported on integer images", fnCandidate.getName().c_str(), "");
+            else if (imageType.getQualifier().layoutFormat != ElfR32f && profile == EEsProfile)
+                error(loc, "only supported on image with format r32f", fnCandidate.getName().c_str(), "");
+        }
+
+        break;
+    }
+
+    case EOpInterpolateAtCentroid:
+    case EOpInterpolateAtSample:
+    case EOpInterpolateAtOffset:
+        // "For the interpolateAt* functions, the call will return a precision
+        // qualification matching the precision of the 'interpolant' argument to
+        // the function call."
+        callNode.getQualifier().precision = arg0->getQualifier().precision;
+
+        // Make sure the first argument is an interpolant, or an array element of an interpolant
+        if (arg0->getType().getQualifier().storage != EvqVaryingIn) {
+            // It might still be an array element.
+            //
+            // We could check more, but the semantics of the first argument are already met; the
+            // only way to turn an array into a float/vec* is array dereference and swizzle.
+            //
+            // ES and desktop 4.3 and earlier:  swizzles may not be used
+            // desktop 4.4 and later: swizzles may be used
+            bool swizzleOkay = (profile != EEsProfile) && (version >= 440);
+            const TIntermTyped* base = TIntermediate::findLValueBase(arg0, swizzleOkay);
+            if (base == nullptr || base->getType().getQualifier().storage != EvqVaryingIn)
+                error(loc, "first argument must be an interpolant, or interpolant-array element", fnCandidate.getName().c_str(), "");
+        }
+        break;
+
+    default:
+        break;
+    }
+}
+
+extern bool PureOperatorBuiltins;
+
+// Deprecated!  Use PureOperatorBuiltins == true instead, in which case this
+// functionality is handled in builtInOpCheck() instead of here.
+//
 // Do additional checking of built-in function calls that were not mapped
 // to built-in operations (e.g., texturing functions).
 //
@@ -1332,10 +1526,18 @@ TIntermTyped* TParseContext::addOutputArgumentConversions(const TFunction& funct
 //
 void TParseContext::nonOpBuiltInCheck(const TSourceLoc& loc, const TFunction& fnCandidate, TIntermAggregate& callNode)
 {
+    // Further maintainance of this function is deprecated, because the "correct" 
+    // future-oriented design is to not have to do string compares on function names.
+
+    // If PureOperatorBuiltins == true, then all built-ins should be mapped
+    // to a TOperator, and this function would then never get called.
+
+    assert(PureOperatorBuiltins == false);
+
     // built-in texturing functions get their return value precision from the precision of the sampler
     if (fnCandidate.getType().getQualifier().precision == EpqNone &&
         fnCandidate.getParamCount() > 0 && fnCandidate[0].type->getBasicType() == EbtSampler)
-        callNode.getQualifier().precision = callNode.getAsAggregate()->getSequence()[0]->getAsTyped()->getQualifier().precision;
+        callNode.getQualifier().precision = callNode.getSequence()[0]->getAsTyped()->getQualifier().precision;
 
     if (fnCandidate.getName().compare(0, 7, "texture") == 0) {
         if (fnCandidate.getName().compare(0, 13, "textureGather") == 0) {
@@ -1428,8 +1630,12 @@ void TParseContext::nonOpBuiltInCheck(const TSourceLoc& loc, const TFunction& fn
         if (imageType.getSampler().type == EbtInt || imageType.getSampler().type == EbtUint) {
             if (imageType.getQualifier().layoutFormat != ElfR32i && imageType.getQualifier().layoutFormat != ElfR32ui)
                 error(loc, "only supported on image with format r32i or r32ui", fnCandidate.getName().c_str(), "");
-        } else if (fnCandidate.getName().compare(0, 19, "imageAtomicExchange") != 0) 
-            error(loc, "only supported on integer images", fnCandidate.getName().c_str(), "");
+        } else {
+            if (fnCandidate.getName().compare(0, 19, "imageAtomicExchange") != 0) 
+                error(loc, "only supported on integer images", fnCandidate.getName().c_str(), "");
+            else if (imageType.getQualifier().layoutFormat != ElfR32f && profile == EEsProfile)
+                error(loc, "only supported on image with format r32f", fnCandidate.getName().c_str(), "");
+        }
     }
 }
 
@@ -1857,6 +2063,8 @@ void TParseContext::reservedPpErrorCheck(const TSourceLoc& loc, const char* iden
     // however, before that, ES tests required an error.
     if (strncmp(identifier, "GL_", 3) == 0)
         ppError(loc, "names beginning with \"GL_\" can't be (un)defined:", op,  identifier);
+    else if (strncmp(identifier, "defined", 8) == 0)
+        ppError(loc, "\"defined\" can't be (un)defined:", op,  identifier);
     else if (strstr(identifier, "__") != 0) {
         if (profile == EEsProfile && version >= 300 &&
             (strcmp(identifier, "__LINE__") == 0 ||
@@ -2173,6 +2381,9 @@ void TParseContext::globalQualifierTypeCheck(const TSourceLoc& loc, const TQuali
     if (qualifier.storage != EvqVaryingIn && qualifier.storage != EvqVaryingOut)
         return;
 
+    if (publicType.shaderQualifiers.blendEquation)
+        error(loc, "can only be applied to a standalone 'out'", "blend equation", "");
+
     // now, knowing it is a shader in/out, do all the in/out semantic checks
 
     if (publicType.basicType == EbtBool) {
@@ -2274,6 +2485,10 @@ void TParseContext::globalQualifierTypeCheck(const TSourceLoc& loc, const TQuali
                 error(loc, "cannot be a matrix", GetStorageQualifierString(qualifier.storage), "");
                 return;
             }
+            if (qualifier.isAuxiliary())
+                error(loc, "can't use auxiliary qualifier on a fragment output", "centroid/sample/patch", "");
+            if (qualifier.isInterpolation())
+                error(loc, "can't use interpolation qualifier on a fragment output", "flat/smooth/noperspective", "");
         break;
 
         case EShLangCompute:
@@ -2523,16 +2738,20 @@ bool TParseContext::arrayError(const TSourceLoc& loc, const TType& type)
         else if (type.isStruct())
             requireProfile(loc, ~EEsProfile, "fragment-shader array-of-struct input");
     }
+    if (type.getQualifier().storage == EvqVaryingOut && language == EShLangFragment) {
+        if (type.isArrayOfArrays())
+            requireProfile(loc, ~EEsProfile, "fragment-shader array-of-array output");
+    }
 
     return false;
 }
 
 //
-// Require array to have size
+// Require array to be completely sized
 //
-void TParseContext::arraySizeRequiredCheck(const TSourceLoc& loc, int size)
+void TParseContext::arraySizeRequiredCheck(const TSourceLoc& loc, const TArraySizes& arraySizes)
 {
-    if (size == UnsizedArraySize)
+    if (arraySizes.isImplicit())
         error(loc, "array size required", "", "");
 }
 
@@ -2541,12 +2760,12 @@ void TParseContext::structArrayCheck(const TSourceLoc& /*loc*/, const TType& typ
     const TTypeList& structure = *type.getStruct();
     for (int m = 0; m < (int)structure.size(); ++m) {
         const TType& member = *structure[m].type;
-        if (member.isArray() && ! member.isExplicitlySizedArray())
-            arraySizeRequiredCheck(structure[m].loc, 0);
+        if (member.isArray())
+            arraySizeRequiredCheck(structure[m].loc, *member.getArraySizes());
     }
 }
 
-void TParseContext::arrayUnsizedCheck(const TSourceLoc& loc, const TQualifier& qualifier, const TArraySizes* arraySizes, bool initializer)
+void TParseContext::arrayUnsizedCheck(const TSourceLoc& loc, const TQualifier& qualifier, const TArraySizes* arraySizes, bool initializer, bool lastMember)
 {
     assert(arraySizes);
 
@@ -2568,6 +2787,12 @@ void TParseContext::arrayUnsizedCheck(const TSourceLoc& loc, const TQualifier& q
 
     // for ES, if size isn't coming from an initializer, it has to be explicitly declared now,
     // with very few exceptions
+
+    // last member of ssbo block exception:
+    if (qualifier.storage == EvqBuffer && lastMember)
+        return;
+
+    // implicitly-sized io exceptions:
     switch (language) {
     case EShLangGeometry:
         if (qualifier.storage == EvqVaryingIn)
@@ -2590,7 +2815,7 @@ void TParseContext::arrayUnsizedCheck(const TSourceLoc& loc, const TQualifier& q
         break;
     }
 
-    arraySizeRequiredCheck(loc, arraySizes->getOuterSize());
+    arraySizeRequiredCheck(loc, *arraySizes);
 }
 
 void TParseContext::arrayOfArrayVersionCheck(const TSourceLoc& loc)
@@ -3484,6 +3709,21 @@ void TParseContext::setLayoutQualifier(const TSourceLoc& loc, TPublicType& publi
                 return;
             }
         }
+        if (id.compare(0, 13, "blend_support") == 0) {
+            bool found = false;
+            for (TBlendEquationShift be = (TBlendEquationShift)0; be < EBlendCount; be = (TBlendEquationShift)(be + 1)) {
+                if (id == TQualifier::getBlendEquationString(be)) {
+                    requireExtensions(loc, 1, &E_GL_KHR_blend_equation_advanced, "blend equation");
+                    intermediate.addBlendEquation(be);
+                    publicType.shaderQualifiers.blendEquation = true;
+                    found = true;
+                    break;
+                }
+            }
+            if (! found)
+                error(loc, "unknown blend equation", "blend_support", "");
+            return;
+        }
     }
     error(loc, "unrecognized layout identifier, or qualifier requires assignment (e.g., binding = 4)", id.c_str(), "");
 }
@@ -3850,7 +4090,7 @@ void TParseContext::layoutTypeCheck(const TSourceLoc& loc, const TType& type)
         // "If the binding point for any uniform or shader storage block instance is less than zero, or greater than or
         // equal to the implementation-dependent maximum number of uniform buffer bindings, a compile-time
         // error will occur. When the binding identifier is used with a uniform or shader storage block instanced as
-        // an array of size N, all elements of the array from binding through binding + N – 1 must be within this
+        // an array of size N, all elements of the array from binding through binding + N - 1 must be within this
         // range."
         //
         if (type.getBasicType() != EbtSampler && type.getBasicType() != EbtBlock && type.getBasicType() != EbtAtomicUint)
@@ -4022,6 +4262,9 @@ void TParseContext::checkNoShaderLayouts(const TSourceLoc& loc, const TShaderQua
         if (shaderQualifiers.localSize[i] > 1)
             error(loc, message, "local_size", "");
     }
+    if (shaderQualifiers.blendEquation)
+        error(loc, message, "blend equation", "");
+    // TBD: correctness: are any of these missing?  pixelCenterInteger, originUpperLeft, spacing, order, pointmode, earlyfragment, depth
 }
 
 // Correct and/or advance an object's offset layout qualifier.
@@ -4230,7 +4473,7 @@ TIntermNode* TParseContext::declareVariable(const TSourceLoc& loc, TString& iden
         arrayDimMerge(type, arraySizes);
 
         // Check that implicit sizing is only where allowed.
-        arrayUnsizedCheck(loc, type.getQualifier(), &type.getArraySizes(), initializer != nullptr);
+        arrayUnsizedCheck(loc, type.getQualifier(), &type.getArraySizes(), initializer != nullptr, false);
 
         if (! arrayQualifierError(loc, type.getQualifier()) && ! arrayError(loc, type))
             declareArray(loc, identifier, type, symbol, newDeclaration);
@@ -4714,8 +4957,10 @@ void TParseContext::declareBlock(const TSourceLoc& loc, TTypeList& typeList, con
     blockStageIoCheck(loc, currentBlockQualifier);
     blockQualifierCheck(loc, currentBlockQualifier);
     if (arraySizes) {
-        arrayUnsizedCheck(loc, currentBlockQualifier, arraySizes, false);
+        arrayUnsizedCheck(loc, currentBlockQualifier, arraySizes, false, false);
         arrayDimCheck(loc, arraySizes, 0);
+        if (arraySizes->getNumDims() > 1)
+            requireProfile(loc, ~EEsProfile, "array-of-array of block");
     }
 
     // fix and check for member storage qualifiers and types that don't belong within a block
@@ -4729,10 +4974,8 @@ void TParseContext::declareBlock(const TSourceLoc& loc, TTypeList& typeList, con
         memberQualifier.storage = currentBlockQualifier.storage;
         if ((currentBlockQualifier.storage == EvqUniform || currentBlockQualifier.storage == EvqBuffer) && (memberQualifier.isInterpolation() || memberQualifier.isAuxiliary()))
             error(memberLoc, "member of uniform or buffer block cannot have an auxiliary or interpolation qualifier", memberType.getFieldName().c_str(), "");
-        if (memberType.isRuntimeSizedArray() && member < typeList.size() - 1)
-            error(memberLoc, "only the last member of a buffer block can be run-time sized", memberType.getFieldName().c_str(), "");
-        if (memberType.isImplicitlySizedArray())
-            requireProfile(memberLoc, ~EEsProfile, "implicitly-sized array in a block");
+        if (memberType.isArray())
+            arrayUnsizedCheck(memberLoc, currentBlockQualifier, &memberType.getArraySizes(), false, member == typeList.size() - 1);
         if (memberQualifier.hasOffset()) {
             requireProfile(memberLoc, ~EEsProfile, "offset on block member");
             profileRequires(memberLoc, ~EEsProfile, 440, E_GL_ARB_enhanced_layouts, "offset on block member");
@@ -5269,6 +5512,10 @@ void TParseContext::updateStandaloneQualifierDefaults(const TSourceLoc& loc, con
             intermediate.setEarlyFragmentTests();
         else
             error(loc, "can only apply to 'in'", "early_fragment_tests", "");
+    }
+    if (publicType.shaderQualifiers.blendEquation) {
+        if (publicType.qualifier.storage != EvqVaryingOut)
+            error(loc, "can only apply to 'out'", "blend equation", "");
     }
 
     const TQualifier& qualifier = publicType.qualifier;
