@@ -1124,7 +1124,10 @@ TIntermTyped* TParseContext::handleFunctionCall(const TSourceLoc& loc, TFunction
                 // if builtIn == true, it's definitely a built-in function with EOpNull
                 if (! builtIn) {
                     call->setUserDefined();
-                    intermediate.addToCallGraph(infoSink, currentCaller, fnCandidate->getMangledName());
+                    if (symbolTable.atGlobalLevel())
+                        error(loc, "can't call user function from global scope", fnCandidate->getName().c_str(), "");
+                    else
+                        intermediate.addToCallGraph(infoSink, currentCaller, fnCandidate->getMangledName());
                 }
 
                 if (builtIn)
@@ -1428,7 +1431,7 @@ void TParseContext::builtInOpCheck(const TSourceLoc& loc, const TFunction& fnCan
         int arg = -1;
         switch (callNode.getOp()) {
         case EOpTextureOffset:          arg = 2;  break;
-        case EOpTextureFetchOffset:     arg = 3;  break;
+        case EOpTextureFetchOffset:     arg = (arg0->getType().getSampler().dim != EsdRect) ? 3 : 2; break;
         case EOpTextureProjOffset:      arg = 2;  break;
         case EOpTextureLodOffset:       arg = 3;  break;
         case EOpTextureProjLodOffset:   arg = 3;  break;
@@ -1918,6 +1921,7 @@ bool TParseContext::lValueErrorCheck(const TSourceLoc& loc, const char* op, TInt
             message = "can't modify a readonly buffer";
         break;
     case EvqFragDepth:
+        intermediate.setDepthReplacing();
         // "In addition, it is an error to statically write to gl_FragDepth in the fragment shader."
         if (profile == EEsProfile && intermediate.getEarlyFragmentTests())
             message = "can't modify gl_FragDepth if using early_fragment_tests";
@@ -4981,9 +4985,8 @@ void TParseContext::declareBlock(const TSourceLoc& loc, TTypeList& typeList, con
             profileRequires(memberLoc, ~EEsProfile, 440, E_GL_ARB_enhanced_layouts, "offset on block member");
         }
 
-        TBasicType basicType = memberType.getBasicType();
-        if (basicType == EbtSampler)
-            error(memberLoc, "member of block cannot be a sampler type", typeList[member].type->getFieldName().c_str(), "");
+        if (memberType.containsOpaque())
+            error(memberLoc, "member of block cannot be or contain a sampler, image, or atomic_uint type", typeList[member].type->getFieldName().c_str(), "");
     }
 
     // This might be a redeclaration of a built-in block.  If so, redeclareBuiltinBlock() will

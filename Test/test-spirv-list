@@ -82,3 +82,4 @@ spv.whileLoop.frag
 spv.atomic.comp
 spv.AofA.frag
 spv.queryL.frag
+spv.shortCircuit.frag

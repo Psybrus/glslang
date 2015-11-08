@@ -3,7 +3,7 @@
 shared vec4 s;   // ERROR
 layout(local_size_x = 2) out;  // ERROR
 buffer vec4 v;  // ERROR
-
+in int ini;
 layout(location = 2) uniform mat4 x;
 layout(location = 3) uniform mat4 y;
 layout(location = 2) out mat4 xi;
@@ -65,8 +65,8 @@ void foo()
     vec4 v4 = texelFetch(s2dms, v2, 2);
     ivec4 iv4 = texelFetch(is2dms, v2, 2);
     textureSamples(s2dms);   // ERROR
-
-
+    float f;
+    frexp(f, ini);     // ERROR, i not writable
 }
 
 out bool outb;         // ERROR
@@ -265,6 +265,10 @@ uniform writeonly imageCubeArray  CA1;
 uniform writeonly iimageCubeArray CA2;
 uniform writeonly uimageCubeArray CA3;
 
+layout(rgba16f) uniform readonly imageCubeArray  rCA1;
+layout(rgba32i) uniform readonly iimageCubeArray rCA2;
+layout(r32ui) uniform readonly uimageCubeArray rCA3;
+
 #ifdef GL_OES_texture_cube_map_array
 uniform samplerCubeArray          CA4;
 uniform samplerCubeArrayShadow    CA5;
@@ -304,6 +308,14 @@ void CAT()
     highp ivec3 s1 = imageSize(CA1);
     highp ivec3 s2 = imageSize(CA2);
     highp ivec3 s3 = imageSize(CA3);
+
+    imageStore(CA1, s3, vec4(1));
+    imageStore(CA2, s3, ivec4(1));
+    imageStore(CA3, s3, uvec4(1));
+
+    highp vec4 cl1 = imageLoad(rCA1, s3);
+    highp ivec4 cl2 = imageLoad(rCA2, s3);
+    highp uvec4 cl3 = imageLoad(rCA3, s3);
 }
 
 uniform sampler2DMSArray  bad2DMS;    // ERROR, reserved

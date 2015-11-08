@@ -1483,6 +1483,13 @@ void TBuiltIns::initialize(int version, EProfile profile)
             stageBuiltins[EShLangVertex].append(
                 "int gl_InstanceID;"          // needs qualifier fixed later
                 );
+        if (version >= 440) {
+            stageBuiltins[EShLangVertex].append(
+                "in int gl_BaseVertexARB;"
+                "in int gl_BaseInstanceARB;"
+                "in int gl_DrawIDARB;"
+                );
+        }
     } else {
         // ES profile
         if (version == 100) {
@@ -2024,7 +2031,11 @@ void TBuiltIns::addQueryFunctions(TSampler sampler, TString& typeName, int versi
 //
 void TBuiltIns::addImageFunctions(TSampler sampler, TString& typeName, int version, EProfile profile)
 {
-    int dims = dimMap[sampler.dim] + (sampler.arrayed ? 1 : 0);
+    int dims = dimMap[sampler.dim];
+    // most things with an array add a dimension, except for cubemaps
+    if (sampler.arrayed && sampler.dim != EsdCube)
+        ++dims;
+
     TString imageParams = typeName;
     if (dims == 1)
         imageParams.append(", int");
@@ -2886,6 +2897,16 @@ void IdentifyBuiltIns(int version, EProfile profile, EShLanguage language, TSymb
 
     switch(language) {
     case EShLangVertex:
+        if (profile != EEsProfile && version >= 440) {
+            symbolTable.setVariableExtensions("gl_BaseVertexARB",   1, &E_GL_ARB_shader_draw_parameters);
+            symbolTable.setVariableExtensions("gl_BaseInstanceARB", 1, &E_GL_ARB_shader_draw_parameters);
+            symbolTable.setVariableExtensions("gl_DrawIDARB",       1, &E_GL_ARB_shader_draw_parameters);
+
+            BuiltInVariable("gl_BaseVertexARB",   EbvBaseVertex,   symbolTable);
+            BuiltInVariable("gl_BaseInstanceARB", EbvBaseInstance, symbolTable);
+            BuiltInVariable("gl_DrawIDARB",       EbvDrawId,       symbolTable);
+        }
+
         // Compatibility variables, vertex only
         BuiltInVariable("gl_Color",          EbvColor,          symbolTable);
         BuiltInVariable("gl_SecondaryColor", EbvSecondaryColor, symbolTable);
@@ -3457,6 +3478,27 @@ void IdentifyBuiltIns(int version, EProfile profile, EShLanguage language, TSymb
             symbolTable.insert(*new TVariable(NewPoolTString("gl_FragData"), fragData));
             SpecialQualifier("gl_FragData", EvqFragColor, EbvFragData, symbolTable);
         }
+        break;
+
+    case EShLangTessControl:
+    case EShLangTessEvaluation:
+        // Because of the context-dependent array size (gl_MaxPatchVertices),
+        // these variables were added later than the others and need to be mapped now.
+
+        // standard members
+        BuiltInVariable("gl_in", "gl_Position",     EbvPosition,     symbolTable);
+        BuiltInVariable("gl_in", "gl_PointSize",    EbvPointSize,    symbolTable);
+        BuiltInVariable("gl_in", "gl_ClipDistance", EbvClipDistance, symbolTable);
+        BuiltInVariable("gl_in", "gl_CullDistance", EbvCullDistance, symbolTable);
+
+        // compatibility members
+        BuiltInVariable("gl_in", "gl_ClipVertex",          EbvClipVertex,          symbolTable);
+        BuiltInVariable("gl_in", "gl_FrontColor",          EbvFrontColor,          symbolTable);
+        BuiltInVariable("gl_in", "gl_BackColor",           EbvBackColor,           symbolTable);
+        BuiltInVariable("gl_in", "gl_FrontSecondaryColor", EbvFrontSecondaryColor, symbolTable);
+        BuiltInVariable("gl_in", "gl_BackSecondaryColor",  EbvBackSecondaryColor,  symbolTable);
+        BuiltInVariable("gl_in", "gl_TexCoord",            EbvTexCoord,            symbolTable);
+        BuiltInVariable("gl_in", "gl_FogFragCoord",        EbvFogFragCoord,        symbolTable);
         break;
 
     default:

@@ -16,6 +16,9 @@ Linked tessellation evaluation stage:
                               MemoryModel Logical GLSL450
                               EntryPoint TessellationEvaluation 4  "main"
                               ExecutionMode 4 InputTriangles
+                              ExecutionMode 4 SpacingFractionalOdd
+                              ExecutionMode 4 VertexOrderCcw
+                              ExecutionMode 4 PointMode
                               Name 4  "main"
                               Name 8  "a"
                               Name 13  "p"
@@ -53,6 +56,9 @@ Linked tessellation evaluation stage:
                               Name 93  "ivla"
                               Name 94  "ivlb"
                               Name 97  "ovla"
+                              MemberDecorate 17(gl_PerVertex) 0 BuiltIn Position
+                              MemberDecorate 17(gl_PerVertex) 1 BuiltIn PointSize
+                              MemberDecorate 17(gl_PerVertex) 2 BuiltIn ClipDistance
                               Decorate 17(gl_PerVertex) Block
                               Decorate 38(gl_PatchVerticesIn) BuiltIn PatchVertices
                               Decorate 41(gl_PrimitiveID) BuiltIn PrimitiveId
