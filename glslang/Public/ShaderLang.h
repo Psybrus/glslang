@@ -242,7 +242,7 @@ SH_IMPORT_EXPORT int ShGetUniformLocation(const ShHandle uniformMap, const char*
 // The below is further designed to handle multiple compilation units per stage, where
 // the intermediate results, including the parse tree, are preserved until link time,
 // rather than the above interface which is designed to have each compilation unit
-// lowered at compile time.  In above model, linking occurs on the lowered results,
+// lowered at compile time.  In the above model, linking occurs on the lowered results,
 // whereas in this model intra-stage linking can occur at the parse tree
 // (treeRoot in TIntermediate) level, and then a full stage can be lowered.
 //
@@ -258,6 +258,7 @@ namespace glslang {
 
 const char* GetEsslVersionString();
 const char* GetGlslVersionString();
+int GetKhronosToolId();
 
 class TIntermediate;
 class TProgram;
@@ -302,7 +303,7 @@ public:
     // Returns an error message for any #include directive.
     class ForbidInclude : public Includer {
     public:
-        std::pair<std::string, std::string> include(const char* filename) const override
+        std::pair<std::string, std::string> include(const char* /*filename*/) const override
         {
             return std::make_pair<std::string, std::string>("", "unexpected include directive");
         }

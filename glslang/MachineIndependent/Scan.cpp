@@ -293,10 +293,33 @@ int yylex(YYSTYPE* glslangTokenDesc, glslang::TParseContext& parseContext)
 
 namespace {
 
+struct str_eq
+{
+    bool operator()(const char* lhs, const char* rhs) const
+    {
+        return strcmp(lhs, rhs) == 0;
+    }
+};
+
+struct str_hash
+{
+    size_t operator()(const char* str) const
+    {
+        // djb2
+        unsigned long hash = 5381;
+        int c;
+
+        while ((c = *str++) != 0)
+            hash = ((hash << 5) + hash) + c;
+
+        return hash;
+    }
+};
+
 // A single global usable by all threads, by all versions, by all languages.
 // After a single process-level initialization, this is read only and thread safe
-std::unordered_map<std::string, int>* KeywordMap = nullptr;
-std::unordered_set<std::string>* ReservedSet = nullptr;
+std::unordered_map<const char*, int, str_hash, str_eq>* KeywordMap = nullptr;
+std::unordered_set<const char*, str_hash, str_eq>* ReservedSet = nullptr;
 
 };
 
@@ -309,7 +332,7 @@ void TScanContext::fillInKeywordMap()
         // but, the only risk is if two threads called simultaneously
         return;
     }
-    KeywordMap = new std::unordered_map<std::string, int>;
+    KeywordMap = new std::unordered_map<const char*, int, str_hash, str_eq>;
 
     (*KeywordMap)["const"] =                   CONST;
     (*KeywordMap)["uniform"] =                 UNIFORM;
@@ -345,8 +368,6 @@ void TScanContext::fillInKeywordMap()
     (*KeywordMap)["mat2"] =                    MAT2;
     (*KeywordMap)["mat3"] =                    MAT3;
     (*KeywordMap)["mat4"] =                    MAT4;
-    (*KeywordMap)["sampler2D"] =               SAMPLER2D;
-    (*KeywordMap)["samplerCube"] =             SAMPLERCUBE;
     (*KeywordMap)["true"] =                    BOOLCONSTANT;
     (*KeywordMap)["false"] =                   BOOLCONSTANT;
     (*KeywordMap)["attribute"] =               ATTRIBUTE;
@@ -425,6 +446,13 @@ void TScanContext::fillInKeywordMap()
     (*KeywordMap)["dvec2"] =                   DVEC2;
     (*KeywordMap)["dvec3"] =                   DVEC3;
     (*KeywordMap)["dvec4"] =                   DVEC4;
+    (*KeywordMap)["uint"] =                    UINT;
+    (*KeywordMap)["uvec2"] =                   UVEC2;
+    (*KeywordMap)["uvec3"] =                   UVEC3;
+    (*KeywordMap)["uvec4"] =                   UVEC4;
+
+    (*KeywordMap)["sampler2D"] =               SAMPLER2D;
+    (*KeywordMap)["samplerCube"] =             SAMPLERCUBE;
     (*KeywordMap)["samplerCubeArray"] =        SAMPLERCUBEARRAY;
     (*KeywordMap)["samplerCubeArrayShadow"] =  SAMPLERCUBEARRAYSHADOW;
     (*KeywordMap)["isamplerCubeArray"] =       ISAMPLERCUBEARRAY;
@@ -435,10 +463,6 @@ void TScanContext::fillInKeywordMap()
     (*KeywordMap)["isampler1D"] =              ISAMPLER1D;
     (*KeywordMap)["usampler1DArray"] =         USAMPLER1DARRAY;
     (*KeywordMap)["samplerBuffer"] =           SAMPLERBUFFER;
-    (*KeywordMap)["uint"] =                    UINT;
-    (*KeywordMap)["uvec2"] =                   UVEC2;
-    (*KeywordMap)["uvec3"] =                   UVEC3;
-    (*KeywordMap)["uvec4"] =                   UVEC4;
     (*KeywordMap)["samplerCubeShadow"] =       SAMPLERCUBESHADOW;
     (*KeywordMap)["sampler2DArray"] =          SAMPLER2DARRAY;
     (*KeywordMap)["sampler2DArrayShadow"] =    SAMPLER2DARRAYSHADOW;
@@ -467,7 +491,53 @@ void TScanContext::fillInKeywordMap()
     (*KeywordMap)["sampler2DRect"] =           SAMPLER2DRECT;
     (*KeywordMap)["sampler2DRectShadow"] =     SAMPLER2DRECTSHADOW;
     (*KeywordMap)["sampler1DArray"] =          SAMPLER1DARRAY;
+
     (*KeywordMap)["samplerExternalOES"] =      SAMPLEREXTERNALOES; // GL_OES_EGL_image_external
+
+    (*KeywordMap)["sampler"] =                 SAMPLER;
+    (*KeywordMap)["samplerShadow"] =           SAMPLERSHADOW;
+
+    (*KeywordMap)["texture2D"] =               TEXTURE2D;
+    (*KeywordMap)["textureCube"] =             TEXTURECUBE;
+    (*KeywordMap)["textureCubeArray"] =        TEXTURECUBEARRAY;
+    (*KeywordMap)["itextureCubeArray"] =       ITEXTURECUBEARRAY;
+    (*KeywordMap)["utextureCubeArray"] =       UTEXTURECUBEARRAY;
+    (*KeywordMap)["itexture1DArray"] =         ITEXTURE1DARRAY;
+    (*KeywordMap)["utexture1D"] =              UTEXTURE1D;
+    (*KeywordMap)["itexture1D"] =              ITEXTURE1D;
+    (*KeywordMap)["utexture1DArray"] =         UTEXTURE1DARRAY;
+    (*KeywordMap)["textureBuffer"] =           TEXTUREBUFFER;
+    (*KeywordMap)["texture2DArray"] =          TEXTURE2DARRAY;
+    (*KeywordMap)["itexture2D"] =              ITEXTURE2D;
+    (*KeywordMap)["itexture3D"] =              ITEXTURE3D;
+    (*KeywordMap)["itextureCube"] =            ITEXTURECUBE;
+    (*KeywordMap)["itexture2DArray"] =         ITEXTURE2DARRAY;
+    (*KeywordMap)["utexture2D"] =              UTEXTURE2D;
+    (*KeywordMap)["utexture3D"] =              UTEXTURE3D;
+    (*KeywordMap)["utextureCube"] =            UTEXTURECUBE;
+    (*KeywordMap)["utexture2DArray"] =         UTEXTURE2DARRAY;
+    (*KeywordMap)["itexture2DRect"] =          ITEXTURE2DRECT;
+    (*KeywordMap)["utexture2DRect"] =          UTEXTURE2DRECT;
+    (*KeywordMap)["itextureBuffer"] =          ITEXTUREBUFFER;
+    (*KeywordMap)["utextureBuffer"] =          UTEXTUREBUFFER;
+    (*KeywordMap)["texture2DMS"] =             TEXTURE2DMS;
+    (*KeywordMap)["itexture2DMS"] =            ITEXTURE2DMS;
+    (*KeywordMap)["utexture2DMS"] =            UTEXTURE2DMS;
+    (*KeywordMap)["texture2DMSArray"] =        TEXTURE2DMSARRAY;
+    (*KeywordMap)["itexture2DMSArray"] =       ITEXTURE2DMSARRAY;
+    (*KeywordMap)["utexture2DMSArray"] =       UTEXTURE2DMSARRAY;
+    (*KeywordMap)["texture1D"] =               TEXTURE1D;
+    (*KeywordMap)["texture3D"] =               TEXTURE3D;
+    (*KeywordMap)["texture2DRect"] =           TEXTURE2DRECT;
+    (*KeywordMap)["texture1DArray"] =          TEXTURE1DARRAY;
+
+    (*KeywordMap)["subpassInput"] =            SUBPASSINPUT;
+    (*KeywordMap)["subpassInputMS"] =          SUBPASSINPUTMS;
+    (*KeywordMap)["isubpassInput"] =           ISUBPASSINPUT;
+    (*KeywordMap)["isubpassInputMS"] =         ISUBPASSINPUTMS;
+    (*KeywordMap)["usubpassInput"] =           USUBPASSINPUT;
+    (*KeywordMap)["usubpassInputMS"] =         USUBPASSINPUTMS;
+
     (*KeywordMap)["noperspective"] =           NOPERSPECTIVE;
     (*KeywordMap)["smooth"] =                  SMOOTH;
     (*KeywordMap)["flat"] =                    FLAT;
@@ -478,7 +548,7 @@ void TScanContext::fillInKeywordMap()
     (*KeywordMap)["resource"] =                RESOURCE;
     (*KeywordMap)["superp"] =                  SUPERP;
 
-    ReservedSet = new std::unordered_set<std::string>;
+    ReservedSet = new std::unordered_set<const char*, str_hash, str_eq>;
     
     ReservedSet->insert("common");
     ReservedSet->insert("partition");
@@ -960,6 +1030,57 @@ int TScanContext::tokenizeIdentifier()
         if (parseContext.symbolTable.atBuiltInLevel() || parseContext.extensionTurnedOn(E_GL_OES_EGL_image_external))
             return keyword;
         return identifierOrType();
+
+    case TEXTURE2D:
+    case TEXTURECUBE:
+    case TEXTURECUBEARRAY:
+    case ITEXTURECUBEARRAY:
+    case UTEXTURECUBEARRAY:
+    case ITEXTURE1DARRAY:
+    case UTEXTURE1D:
+    case ITEXTURE1D:
+    case UTEXTURE1DARRAY:
+    case TEXTUREBUFFER:
+    case TEXTURE2DARRAY:
+    case ITEXTURE2D:
+    case ITEXTURE3D:
+    case ITEXTURECUBE:
+    case ITEXTURE2DARRAY:
+    case UTEXTURE2D:
+    case UTEXTURE3D:
+    case UTEXTURECUBE:
+    case UTEXTURE2DARRAY:
+    case ITEXTURE2DRECT:
+    case UTEXTURE2DRECT:
+    case ITEXTUREBUFFER:
+    case UTEXTUREBUFFER:
+    case TEXTURE2DMS:
+    case ITEXTURE2DMS:
+    case UTEXTURE2DMS:
+    case TEXTURE2DMSARRAY:
+    case ITEXTURE2DMSARRAY:
+    case UTEXTURE2DMSARRAY:
+    case TEXTURE1D:
+    case TEXTURE3D:
+    case TEXTURE2DRECT:
+    case TEXTURE1DARRAY:
+    case SAMPLER:
+    case SAMPLERSHADOW:
+        if (parseContext.spv > 0)
+            return keyword;
+        else
+            return identifierOrType();
+
+    case SUBPASSINPUT:
+    case SUBPASSINPUTMS:
+    case ISUBPASSINPUT:
+    case ISUBPASSINPUTMS:
+    case USUBPASSINPUT:
+    case USUBPASSINPUTMS:
+        if (parseContext.spv > 0)
+            return keyword;
+        else
+            return identifierOrType();
 
     case NOPERSPECTIVE:
         return es30ReservedFromGLSL(130);

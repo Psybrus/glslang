@@ -3,6 +3,8 @@
 *.so
 *.exe
 tags
+glslang/MachineIndependent/glslang_tab.cpp
+glslang/MachineIndependent/glslang_tab.cpp.h
 build/
 glslang/MachineIndependent/glslang_tab.cpp
 glslang/MachineIndependent/glslang_tab.cpp.h

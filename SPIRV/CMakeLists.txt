@@ -1,9 +1,8 @@
 cmake_minimum_required(VERSION 2.8)
 
-include_directories(.. ${CMAKE_CURRENT_BINARY_DIR})
-
 set(SOURCES
     GlslangToSpv.cpp
+    InReadableOrder.cpp
     SpvBuilder.cpp
     SPVRemapper.cpp
     doc.cpp

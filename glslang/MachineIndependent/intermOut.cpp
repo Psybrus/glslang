@@ -318,6 +318,8 @@ bool TOutputTraverser::visitUnary(TVisit /* visit */, TIntermUnary* node)
     case EOpFindLSB:                out.debug << "findLSB";               break;
     case EOpFindMSB:                out.debug << "findMSB";               break;
 
+    case EOpNoise:                  out.debug << "noise";                 break;
+
     default: out.debug.message(EPrefixError, "Bad unary op");
     }
 
@@ -381,8 +383,9 @@ bool TOutputTraverser::visitAggregate(TVisit /* visit */, TIntermAggregate* node
     case EOpConstructDMat3x4: out.debug << "Construct dmat3x4"; break;
     case EOpConstructDMat4x2: out.debug << "Construct dmat4x2"; break;
     case EOpConstructDMat4x3: out.debug << "Construct dmat4x3"; break;
-    case EOpConstructDMat4x4: out.debug << "Construct dmat4";  break;
+    case EOpConstructDMat4x4: out.debug << "Construct dmat4";   break;
     case EOpConstructStruct:  out.debug << "Construct structure";  break;
+    case EOpConstructTextureSampler: out.debug << "Construct combined texture-sampler"; break;
 
     case EOpLessThan:         out.debug << "Compare Less Than";             break;
     case EOpGreaterThan:      out.debug << "Compare Greater Than";          break;
@@ -753,6 +756,20 @@ void TIntermediate::output(TInfoSink& infoSink, bool tree)
 
     case EShLangCompute:
         infoSink.debug << "local_size = (" << localSize[0] << ", " << localSize[1] << ", " << localSize[2] << ")\n";
+        {
+            bool dumpSpecIds = false;
+            for (auto c : localSizeSpecId) {
+                if (c != TQualifier::layoutNotSet)
+                    dumpSpecIds = true;
+            }
+
+            if (dumpSpecIds) {
+                infoSink.debug << "local_size ids = (" <<
+                    localSizeSpecId[0] << ", " <<
+                    localSizeSpecId[1] << ", " <<
+                    localSizeSpecId[2] << ")\n";
+            }
+        }
         break;
 
     default:
