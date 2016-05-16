@@ -721,7 +721,7 @@ struct DoPreprocessing {
 
         std::stringstream outputStream;
         SourceLineSynchronizer lineSync(
-            std::bind(&TInputScanner::getLastValidSourceIndex, &input), &outputStream);
+            [&input](){ return input.getLastValidSourceIndex(); }, &outputStream);
 
         parseContext.setExtensionCallback([&lineSync, &outputStream](
             int line, const char* extension, const char* behavior) {
