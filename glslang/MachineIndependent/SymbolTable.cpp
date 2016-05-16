@@ -62,6 +62,8 @@ void TType::buildMangledName(TString& mangledName)
     case EbtDouble:             mangledName += 'd';      break;
     case EbtInt:                mangledName += 'i';      break;
     case EbtUint:               mangledName += 'u';      break;
+    case EbtInt64:              mangledName += "i64";    break;
+    case EbtUint64:             mangledName += "u64";    break;
     case EbtBool:               mangledName += 'b';      break;
     case EbtAtomicUint:         mangledName += "au";     break;
     case EbtSampler:
@@ -252,11 +254,14 @@ TVariable::TVariable(const TVariable& copyOf) : TSymbol(copyOf)
     if (copyOf.numExtensions != 0)
         setExtensions(copyOf.numExtensions, copyOf.extensions);
 
-    if (! copyOf.unionArray.empty()) {
+    if (! copyOf.constArray.empty()) {
         assert(! copyOf.type.isStruct());
-        TConstUnionArray newArray(copyOf.unionArray, 0, copyOf.unionArray.size());
-        unionArray = newArray;
+        TConstUnionArray newArray(copyOf.constArray, 0, copyOf.constArray.size());
+        constArray = newArray;
     }
+
+    // don't support specialization-constant subtrees in cloned tables
+    constSubtree = nullptr;
 }
 
 TVariable* TVariable::clone() const
