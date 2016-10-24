@@ -54,10 +54,10 @@ namespace glslang {
 class TParseVersions {
 public:
     TParseVersions(TIntermediate& interm, int version, EProfile profile,
-                   int spv, int vulkan, EShLanguage language, TInfoSink& infoSink,
+                   const SpvVersion& spvVersion, EShLanguage language, TInfoSink& infoSink,
                    bool forwardCompatible, EShMessages messages)
         : infoSink(infoSink), version(version), profile(profile), language(language),
-          spv(spv), vulkan(vulkan), forwardCompatible(forwardCompatible),
+          spvVersion(spvVersion), forwardCompatible(forwardCompatible),
           intermediate(interm), messages(messages), numErrors(0), currentScanner(0) { }
     virtual ~TParseVersions() { }
     virtual void initializeExtensionBehavior();
@@ -76,6 +76,9 @@ public:
     virtual void updateExtensionBehavior(int line, const char* const extension, const char* behavior);
     virtual void fullIntegerCheck(const TSourceLoc&, const char* op);
     virtual void doubleCheck(const TSourceLoc&, const char* op);
+#ifdef AMD_EXTENSIONS
+    virtual void float16Check(const TSourceLoc&, const char* op, bool builtIn = false);
+#endif
     virtual void int64Check(const TSourceLoc&, const char* op, bool builtIn = false);
     virtual void spvRemoved(const TSourceLoc&, const char* op);
     virtual void vulkanRemoved(const TSourceLoc&, const char* op);
@@ -114,18 +117,17 @@ public:
     int version;                 // version, updated by #version in the shader
     EProfile profile;            // the declared profile in the shader (core by default)
     EShLanguage language;        // really the stage
-    int spv;                     // SPIR-V version; 0 means not SPIR-V
-    int vulkan;                  // Vulkan version; 0 means not vulkan
+    SpvVersion spvVersion;
     bool forwardCompatible;      // true if errors are to be given for use of deprecated features
     TIntermediate& intermediate; // helper for making and hooking up pieces of the parse tree
 
 protected:
+    TMap<TString, TExtensionBehavior> extensionBehavior;    // for each extension string, what its current behavior is set to
     EShMessages messages;        // errors/warnings/rule-sets
     int numErrors;               // number of compile-time errors encountered
     TInputScanner* currentScanner;
 
 private:
-    TMap<TString, TExtensionBehavior> extensionBehavior;    // for each extension string, what its current behavior is set to
     explicit TParseVersions(const TParseVersions&);
     TParseVersions& operator=(const TParseVersions&);
 };

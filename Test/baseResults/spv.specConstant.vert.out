@@ -16,7 +16,7 @@ Linked vertex stage:
                               EntryPoint Vertex 4  "main" 20 22 28 53
                               Source GLSL 400
                               Name 4  "main"
-                              Name 14  "foo(vf4[s1498];"
+                              Name 14  "foo(vf4[s1516];"
                               Name 13  "p"
                               Name 17  "builtin_spec_constant("
                               Name 20  "color"
@@ -61,6 +61,7 @@ Linked vertex stage:
               38:             TypeFloat 64
               39:   38(float) SpecConstant 1413754136 1074340347
               40:    6(float) SpecConstant 1078523331
+              41:   38(float) SpecConstantOp 115 40
               50:      8(int) SpecConstant 12
               51:             TypeArray 7(fvec4) 50
               52:             TypePointer Input 51
@@ -69,6 +70,7 @@ Linked vertex stage:
               63:     33(int) SpecConstant 2
               67:   38(float) SpecConstant 1413754136 1074340347
               68:    6(float) SpecConstant 1078523331
+              69:   38(float) SpecConstantOp 115 68
               75:             TypePointer Function 8(int)
               77:      8(int) SpecConstant 8
          4(main):           2 Function None 3
@@ -87,7 +89,6 @@ Linked vertex stage:
                                 Store 20(color) 37
                                 Branch 32
               32:             Label
-              41:   38(float) FConvert 40
               42:   38(float) FDiv 39 41
               43:    6(float) FConvert 42
               44:    7(fvec4) Load 20(color)
@@ -96,10 +97,10 @@ Linked vertex stage:
                               Store 20(color) 46
               48:          10 Load 22(ucol)
                               Store 47(param) 48
-              49:           2 FunctionCall 14(foo(vf4[s1498];) 47(param)
+              49:           2 FunctionCall 14(foo(vf4[s1516];) 47(param)
                               Return
                               FunctionEnd
-14(foo(vf4[s1498];):           2 Function None 12
+14(foo(vf4[s1516];):           2 Function None 12
            13(p):     11(ptr) FunctionParameter
               15:             Label
               54:     24(ptr) AccessChain 53(dupUcol) 23
@@ -119,7 +120,6 @@ Linked vertex stage:
                                 Store 20(color) 66
                                 Branch 62
               62:             Label
-              69:   38(float) FConvert 68
               70:   38(float) FDiv 67 69
               71:    6(float) FConvert 70
               72:    7(fvec4) Load 20(color)

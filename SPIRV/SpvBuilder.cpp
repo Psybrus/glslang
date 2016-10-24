@@ -38,13 +38,17 @@
 // SpvBuilder.h.
 //
 
-#include <assert.h>
-#include <stdlib.h>
+#include <cassert>
+#include <cstdlib>
 
 #include <unordered_set>
 #include <algorithm>
 
 #include "SpvBuilder.h"
+
+#ifdef AMD_EXTENSIONS
+    #include "hex_float.h"
+#endif
 
 #ifndef _WIN32
     #include <cstdio>
@@ -785,6 +789,36 @@ Id Builder::makeDoubleConstant(double d, bool specConstant)
     return c->getResultId();
 }
 
+#ifdef AMD_EXTENSIONS
+Id Builder::makeFloat16Constant(float f16, bool specConstant)
+{
+    Op opcode = specConstant ? OpSpecConstant : OpConstant;
+    Id typeId = makeFloatType(16);
+
+    spvutils::HexFloat<spvutils::FloatProxy<float>> fVal(f16);
+    spvutils::HexFloat<spvutils::FloatProxy<spvutils::Float16>> f16Val(0);
+    fVal.castTo(f16Val, spvutils::kRoundToZero);
+
+    unsigned value = f16Val.value().getAsFloat().get_value();
+
+    // See if we already made it. Applies only to regular constants, because specialization constants
+    // must remain distinct for the purpose of applying a SpecId decoration.
+    if (!specConstant) {
+        Id existing = findScalarConstant(OpTypeFloat, opcode, typeId, value);
+        if (existing)
+            return existing;
+    }
+
+    Instruction* c = new Instruction(getUniqueId(), typeId, opcode);
+    c->addImmediateOperand(value);
+    constantsTypesGlobals.push_back(std::unique_ptr<Instruction>(c));
+    groupedConstants[OpTypeFloat].push_back(c);
+    module.mapInstruction(c);
+
+    return c->getResultId();
+}
+#endif
+
 Id Builder::findCompositeConstant(Op typeClass, std::vector<Id>& comps) const
 {
     Instruction* constant = 0;
@@ -907,7 +941,7 @@ void Builder::addLine(Id target, Id fileName, int lineNum, int column)
 
 void Builder::addDecoration(Id id, Decoration decoration, int num)
 {
-    if (decoration == (spv::Decoration)spv::BadValue)
+    if (decoration == spv::DecorationMax)
         return;
     Instruction* dec = new Instruction(OpDecorate);
     dec->addIdOperand(id);
@@ -931,7 +965,7 @@ void Builder::addMemberDecoration(Id id, unsigned int member, Decoration decorat
 }
 
 // Comments in header
-Function* Builder::makeEntrypoint(const char* entryPoint)
+Function* Builder::makeEntryPoint(const char* entryPoint)
 {
     assert(! mainFunction);
 
@@ -1328,15 +1362,20 @@ Id Builder::createRvalueSwizzle(Decoration precision, Id typeId, Id source, std:
 // Comments in header
 Id Builder::createLvalueSwizzle(Id typeId, Id target, Id source, std::vector<unsigned>& channels)
 {
-    assert(getNumComponents(source) == (int)channels.size());
     if (channels.size() == 1 && getNumComponents(source) == 1)
         return createCompositeInsert(source, target, typeId, channels.front());
 
     Instruction* swizzle = new Instruction(getUniqueId(), typeId, OpVectorShuffle);
-    assert(isVector(source));
     assert(isVector(target));
     swizzle->addIdOperand(target);
-    swizzle->addIdOperand(source);
+    if (accessChain.component != NoResult)
+        // For dynamic component selection, source does not involve in l-value swizzle
+        swizzle->addIdOperand(target);
+    else {
+        assert(getNumComponents(source) == (int)channels.size());
+        assert(isVector(source));
+        swizzle->addIdOperand(source);
+    }
 
     // Set up an identity shuffle from the base value to the result value
     unsigned int components[4];
@@ -1345,8 +1384,12 @@ Id Builder::createLvalueSwizzle(Id typeId, Id target, Id source, std::vector<uns
         components[i] = i;
 
     // Punch in the l-value swizzle
-    for (int i = 0; i < (int)channels.size(); ++i)
-        components[channels[i]] = numTargetComponents + i;
+    for (int i = 0; i < (int)channels.size(); ++i) {
+        if (accessChain.component != NoResult)
+            components[i] = channels[i]; // Only shuffle the base value
+        else
+            components[channels[i]] = numTargetComponents + i;
+    }
 
     // finish the instruction with these components selectors
     for (int i = 0; i < numTargetComponents; ++i)
@@ -1430,10 +1473,10 @@ Id Builder::createTextureCall(Decoration precision, Id resultType, bool sparse, 
     bool explicitLod = false;
     texArgs[numArgs++] = parameters.sampler;
     texArgs[numArgs++] = parameters.coords;
-    if (parameters.Dref)
+    if (parameters.Dref != NoResult)
         texArgs[numArgs++] = parameters.Dref;
-    if (parameters.comp)
-        texArgs[numArgs++] = parameters.comp;
+    if (parameters.component != NoResult)
+        texArgs[numArgs++] = parameters.component;
 
     //
     // Set up the optional arguments
@@ -1830,6 +1873,9 @@ Id Builder::createMatrixConstructor(Decoration precision, const std::vector<Id>&
     int numCols = getTypeNumColumns(resultTypeId);
     int numRows = getTypeNumRows(resultTypeId);
 
+    Instruction* instr = module.getInstruction(componentTypeId);
+    Id bitCount = instr->getIdOperand(0);
+
     // Will use a two step process
     // 1. make a compile-time 2D array of values
     // 2. construct a matrix from that array
@@ -1838,8 +1884,8 @@ Id Builder::createMatrixConstructor(Decoration precision, const std::vector<Id>&
 
     // initialize the array to the identity matrix
     Id ids[maxMatrixSize][maxMatrixSize];
-    Id  one = makeFloatConstant(1.0);
-    Id zero = makeFloatConstant(0.0);
+    Id  one = (bitCount == 64 ? makeDoubleConstant(1.0) : makeFloatConstant(1.0));
+    Id zero = (bitCount == 64 ? makeDoubleConstant(0.0) : makeFloatConstant(0.0));
     for (int col = 0; col < 4; ++col) {
         for (int row = 0; row < 4; ++row) {
             if (col == row)
@@ -2042,8 +2088,15 @@ Block& Builder::makeNewBlock()
 
 Builder::LoopBlocks& Builder::makeNewLoop()
 {
-    // Older MSVC versions don't allow inlining of blocks below.
-    LoopBlocks blocks = {makeNewBlock(), makeNewBlock(), makeNewBlock(), makeNewBlock()};
+    // This verbosity is needed to simultaneously get the same behavior
+    // everywhere (id's in the same order), have a syntax that works
+    // across lots of versions of C++, have no warnings from pedantic
+    // compilation modes, and leave the rest of the code alone.
+    Block& head            = makeNewBlock();
+    Block& body            = makeNewBlock();
+    Block& merge           = makeNewBlock();
+    Block& continue_target = makeNewBlock();
+    LoopBlocks blocks(head, body, merge, continue_target);
     loops.push(blocks);
     return loops.top();
 }
@@ -2107,9 +2160,6 @@ void Builder::accessChainStore(Id rvalue)
 
     transferAccessChainSwizzle(true);
     Id base = collapseAccessChain();
-
-    if (accessChain.swizzle.size() && accessChain.component != NoResult)
-        logger->missingFunctionality("simultaneous l-value swizzle and dynamic component selection");
 
     // If swizzle still exists, it is out-of-order or not full, we must load the target vector,
     // extract and insert elements to perform writeMask and/or swizzle.
@@ -2302,7 +2352,11 @@ void Builder::dump(std::vector<unsigned int>& out) const
         capInst.dump(out);
     }
 
-    // TBD: OpExtension ...
+    for (auto it = extensions.cbegin(); it != extensions.cend(); ++it) {
+        Instruction extInst(0, 0, OpExtension);
+        extInst.addStringOperand(*it);
+        extInst.dump(out);
+    }
 
     dumpInstructions(out, imports);
     Instruction memInst(0, 0, OpMemoryModel);
@@ -2321,10 +2375,10 @@ void Builder::dump(std::vector<unsigned int>& out) const
         sourceInst.addImmediateOperand(sourceVersion);
         sourceInst.dump(out);
     }
-    for (int e = 0; e < (int)extensions.size(); ++e) {
-        Instruction extInst(0, 0, OpSourceExtension);
-        extInst.addStringOperand(extensions[e]);
-        extInst.dump(out);
+    for (int e = 0; e < (int)sourceExtensions.size(); ++e) {
+        Instruction sourceExtInst(0, 0, OpSourceExtension);
+        sourceExtInst.addStringOperand(sourceExtensions[e]);
+        sourceExtInst.dump(out);
     }
     dumpInstructions(out, names);
     dumpInstructions(out, lines);

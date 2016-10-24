@@ -36,7 +36,7 @@
 
 namespace glslangtest {
 
-std::string FileNameAsCustomTestName(
+std::string FileNameAsCustomTestSuffix(
     const ::testing::TestParamInfo<std::string>& info)
 {
     std::string name = info.param;
@@ -46,7 +46,7 @@ std::string FileNameAsCustomTestName(
     return name;
 }
 
-EShLanguage GetGlslLanguageForStage(const std::string& stage)
+EShLanguage GetShaderStage(const std::string& stage)
 {
     if (stage == "vert") {
         return EShLangVertex;
@@ -66,17 +66,27 @@ EShLanguage GetGlslLanguageForStage(const std::string& stage)
     }
 }
 
-EShMessages GetSpirvMessageOptionsForSemanticsAndTarget(Semantics semantics,
-                                                        Target target)
+EShMessages DeriveOptions(Source source, Semantics semantics, Target target)
 {
-    EShMessages result = EShMsgDefault;
+    EShMessages result = EShMsgCascadingErrors;
+
+    switch (source) {
+        case Source::GLSL:
+            break;
+        case Source::HLSL:
+            result = static_cast<EShMessages>(result | EShMsgReadHlsl);
+            break;
+    }
 
     switch (target) {
         case Target::AST:
-            result = EShMsgAST;
+            result = static_cast<EShMessages>(result | EShMsgAST);
             break;
-        case Target::Spirv:
-            result = EShMsgSpvRules;
+        case Target::Spv:
+            result = static_cast<EShMessages>(result | EShMsgSpvRules);
+            break;
+        case Target::BothASTAndSpv:
+            result = static_cast<EShMessages>(result | EShMsgSpvRules | EShMsgAST);
             break;
     };
 
@@ -84,7 +94,7 @@ EShMessages GetSpirvMessageOptionsForSemanticsAndTarget(Semantics semantics,
         case Semantics::OpenGL:
             break;
         case Semantics::Vulkan:
-            result = static_cast<EShMessages>(result | EShMsgVulkanRules);
+            result = static_cast<EShMessages>(result | EShMsgVulkanRules | EShMsgSpvRules);
             break;
     }
 
@@ -97,13 +107,39 @@ std::pair<bool, std::string> ReadFile(const std::string& path)
     if (fstream) {
         std::string contents;
         fstream.seekg(0, std::ios::end);
-        contents.reserve(fstream.tellg());
+        contents.reserve((std::string::size_type)fstream.tellg());
         fstream.seekg(0, std::ios::beg);
         contents.assign((std::istreambuf_iterator<char>(fstream)),
                         std::istreambuf_iterator<char>());
         return std::make_pair(true, contents);
     }
     return std::make_pair(false, "");
+}
+
+std::pair<bool, std::vector<std::uint32_t> > ReadSpvBinaryFile(const std::string& path)
+{
+    std::ifstream fstream(path, std::fstream::in | std::fstream::binary);
+
+    if (!fstream)
+        return std::make_pair(false, std::vector<std::uint32_t>());
+
+    std::vector<std::uint32_t> contents;
+
+    // Reserve space (for efficiency, not for correctness)
+    fstream.seekg(0, fstream.end);
+    contents.reserve(size_t(fstream.tellg()) / sizeof(std::uint32_t));
+    fstream.seekg(0, fstream.beg);
+
+    // There is no istream iterator traversing by uint32_t, so we must loop.
+    while (!fstream.eof()) {
+        std::uint32_t inWord;
+        fstream.read((char *)&inWord, sizeof(inWord));
+
+        if (!fstream.eof())
+            contents.push_back(inWord);
+    }
+
+    return std::make_pair(true, contents); // hopefully, c++11 move semantics optimizes the copy away.
 }
 
 bool WriteFile(const std::string& path, const std::string& contents)

@@ -43,8 +43,9 @@ using CompileToAstTest = GlslangTest<::testing::TestWithParam<std::string>>;
 
 TEST_P(CompileToAstTest, FromFile)
 {
-    loadFileCompileAndCheck(GLSLANG_TEST_DIRECTORY, GetParam(),
-                            Semantics::OpenGL, Target::AST);
+    loadFileCompileAndCheck(GlobalTestSettings.testRoot, GetParam(),
+                            Source::GLSL, Semantics::OpenGL,
+                            Target::AST);
 }
 
 // clang-format off
@@ -77,6 +78,7 @@ INSTANTIATE_TEST_CASE_P(
         "cppSimple.vert",
         "cppIndent.vert",
         "cppNest.vert",
+        "cppBad.vert",
         "cppComplexExpr.vert",
         "badChars.frag",
         "pointCoord.frag",
@@ -112,6 +114,9 @@ INSTANTIATE_TEST_CASE_P(
         "110scope.vert",
         "300scope.vert",
         "400.frag",
+        "400.vert",
+        "410.vert",
+        "420.comp",
         "420.frag",
         "420.vert",
         "420.geom",
@@ -181,9 +186,12 @@ INSTANTIATE_TEST_CASE_P(
         "voidFunction.frag",
         "whileLoop.frag",
         "nonVulkan.frag",
-        "spv.atomic.comp",
+        "negativeArraySize.comp",
+        "precise.tesc",
+        "precise_struct_block.vert",
+        "maxClipDistances.vert",
     })),
-    FileNameAsCustomTestName
+    FileNameAsCustomTestSuffix
 );
 // clang-format on
 

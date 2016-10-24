@@ -1,5 +1,7 @@
 //
 //Copyright (C) 2002-2005  3Dlabs Inc. Ltd.
+//Copyright (C) 2013-2016 LunarG, Inc.
+//
 //All rights reserved.
 //
 //Redistribution and use in source and binary forms, with or without
@@ -36,6 +38,8 @@
 
 #include "../Include/ResourceLimits.h"
 #include "../MachineIndependent/Versions.h"
+
+#include <cstring>
 
 #ifdef _WIN32
 #define C_DECL __cdecl
@@ -99,6 +103,8 @@ typedef enum {
 
 namespace glslang {
 
+class TType;
+
 typedef enum {
     EShSourceNone,
     EShSourceGlsl,
@@ -139,6 +145,7 @@ enum EShMessages {
     EShMsgVulkanRules      = (1 << 4),  // issue messages for Vulkan-requirements of GLSL for SPIR-V
     EShMsgOnlyPreprocessor = (1 << 5),  // only print out errors produced by the preprocessor
     EShMsgReadHlsl         = (1 << 6),  // use HLSL parsing rules and semantics
+    EShMsgCascadingErrors  = (1 << 7),  // get cascading errors; risks error-recovery issues, instead of an early exit
 };
 
 //
@@ -222,7 +229,6 @@ SH_IMPORT_EXPORT const char* ShGetInfoLog(const ShHandle);
 SH_IMPORT_EXPORT const void* ShGetExecutable(const ShHandle);
 SH_IMPORT_EXPORT int ShSetVirtualAttributeBindings(const ShHandle, const ShBindingTable*);   // to detect user aliasing
 SH_IMPORT_EXPORT int ShSetFixedAttributeBindings(const ShHandle, const ShBindingTable*);     // to force any physical mappings
-SH_IMPORT_EXPORT int ShGetPhysicalAttributeBindings(const ShHandle, const ShBindingTable**); // for all attributes
 //
 // Tell the linker to never assign a vertex attribute to this list of physical attributes
 //
@@ -298,6 +304,12 @@ public:
         const char* const* s, const int* l, const char* const* names, int n);
     void setPreamble(const char* s) { preamble = s; }
     void setEntryPoint(const char* entryPoint);
+    void setShiftSamplerBinding(unsigned int base);
+    void setShiftTextureBinding(unsigned int base);
+    void setShiftUboBinding(unsigned int base);
+    void setAutoMapBindings(bool map);
+    void setFlattenUniformArrays(bool flatten);
+    void setNoStorageFormat(bool useUnknownFormat);
 
     // Interface to #include handlers.
     //
@@ -308,7 +320,7 @@ public:
     // 2. Call parse with an Includer.
     //
     // When the Glslang parser encounters an #include directive, it calls
-    // the Includer's include method with the the requested include name
+    // the Includer's include method with the requested include name
     // together with the current string name.  The returned IncludeResult
     // contains the fully resolved name of the included source, together
     // with the source text that should replace the #include directive
@@ -324,20 +336,25 @@ public:
         // An IncludeResult contains the resolved name and content of a source
         // inclusion.
         struct IncludeResult {
+            IncludeResult(const std::string& file_name, const char* const file_data, const size_t file_length, void* user_data) :
+                file_name(file_name), file_data(file_data), file_length(file_length), user_data(user_data) { }
             // For a successful inclusion, the fully resolved name of the requested
-            // include.  For example, in a filesystem-based includer, full resolution
+            // include.  For example, in a file system-based includer, full resolution
             // should convert a relative path name into an absolute path name.
             // For a failed inclusion, this is an empty string.
-            std::string file_name;
+            const std::string file_name;
             // The content and byte length of the requested inclusion.  The
             // Includer producing this IncludeResult retains ownership of the
             // storage.
             // For a failed inclusion, the file_data
             // field points to a string containing error details.
-            const char* file_data;
+            const char* const file_data;
             const size_t file_length;
             // Include resolver's context.
             void* user_data;
+        protected:
+            IncludeResult& operator=(const IncludeResult&);
+            IncludeResult();
         };
 
         // Resolves an inclusion request by name, type, current source name,
@@ -366,11 +383,8 @@ public:
     public:
         IncludeResult* include(const char*, IncludeType, const char*, size_t) override
         {
-            static const char unexpected_include[] =
-                "unexpected include directive";
-            static const IncludeResult unexpectedIncludeResult =
-                {"", unexpected_include, sizeof(unexpected_include) - 1, nullptr};
-            return new IncludeResult(unexpectedIncludeResult);
+            const char* unexpected_include = "unexpected include directive";
+            return new IncludeResult(std::string(""), unexpected_include, strlen(unexpected_include), nullptr);
         }
         virtual void releaseInclude(IncludeResult* result) override
         {
@@ -429,6 +443,7 @@ private:
 };
 
 class TReflection;
+class TIoMapper;
 
 // Make one TProgram per set of shaders that will get linked together.  Add all 
 // the shaders that are to be linked together.  After calling shader.parse()
@@ -451,17 +466,26 @@ public:
 
     // Reflection Interface
     bool buildReflection();                          // call first, to do liveness analysis, index mapping, etc.; returns false on failure
-    int getNumLiveUniformVariables();                // can be used for glGetProgramiv(GL_ACTIVE_UNIFORMS)
-    int getNumLiveUniformBlocks();                   // can be used for glGetProgramiv(GL_ACTIVE_UNIFORM_BLOCKS)
-    const char* getUniformName(int index);           // can be used for "name" part of glGetActiveUniform()
-    const char* getUniformBlockName(int blockIndex); // can be used for glGetActiveUniformBlockName()
-    int getUniformBlockSize(int blockIndex);         // can be used for glGetActiveUniformBlockiv(UNIFORM_BLOCK_DATA_SIZE)
-    int getUniformIndex(const char* name);           // can be used for glGetUniformIndices()
-    int getUniformBlockIndex(int index);             // can be used for glGetActiveUniformsiv(GL_UNIFORM_BLOCK_INDEX)
-    int getUniformType(int index);                   // can be used for glGetActiveUniformsiv(GL_UNIFORM_TYPE)
-    int getUniformBufferOffset(int index);           // can be used for glGetActiveUniformsiv(GL_UNIFORM_OFFSET)
-    int getUniformArraySize(int index);              // can be used for glGetActiveUniformsiv(GL_UNIFORM_SIZE)
+    int getNumLiveUniformVariables() const;                // can be used for glGetProgramiv(GL_ACTIVE_UNIFORMS)
+    int getNumLiveUniformBlocks() const;                   // can be used for glGetProgramiv(GL_ACTIVE_UNIFORM_BLOCKS)
+    const char* getUniformName(int index) const;           // can be used for "name" part of glGetActiveUniform()
+    const char* getUniformBlockName(int blockIndex) const; // can be used for glGetActiveUniformBlockName()
+    int getUniformBlockSize(int blockIndex) const;         // can be used for glGetActiveUniformBlockiv(UNIFORM_BLOCK_DATA_SIZE)
+    int getUniformIndex(const char* name) const;           // can be used for glGetUniformIndices()
+    int getUniformBlockIndex(int index) const;             // can be used for glGetActiveUniformsiv(GL_UNIFORM_BLOCK_INDEX)
+    int getUniformType(int index) const;                   // can be used for glGetActiveUniformsiv(GL_UNIFORM_TYPE)
+    int getUniformBufferOffset(int index) const;           // can be used for glGetActiveUniformsiv(GL_UNIFORM_OFFSET)
+    int getUniformArraySize(int index) const;              // can be used for glGetActiveUniformsiv(GL_UNIFORM_SIZE)
+    int getNumLiveAttributes() const;                      // can be used for glGetProgramiv(GL_ACTIVE_ATTRIBUTES)
+    const char *getAttributeName(int index) const;         // can be used for glGetActiveAttrib()
+    int getAttributeType(int index) const;                 // can be used for glGetActiveAttrib()
+    const TType* getUniformTType(int index) const;         // returns a TType*
+    const TType* getUniformBlockTType(int index) const;    // returns a TType*    
+
     void dumpReflection();
+
+    // I/O mapping: apply base offsets and map live unbound variables
+    bool mapIO();
 
 protected:
     bool linkStage(EShLanguage, EShMessages);
@@ -472,6 +496,7 @@ protected:
     bool newedIntermediate[EShLangCount];      // track which intermediate were "new" versus reusing a singleton unit in a stage
     TInfoSink* infoSink;
     TReflection* reflection;
+    TIoMapper* ioMapper;
     bool linked;
 
 private:
